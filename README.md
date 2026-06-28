@@ -8,265 +8,473 @@
 
 # Enumerator
 
-**Enumerator** is an fscan-driven Active Directory recon orchestrator with two interfaces: a command-line workflow for fast operator-driven enumeration and a localhost-only web dashboard for launching scans, reviewing results, and exporting a PDF report.
+**Enumerator** is an fscan-driven Active Directory recon aggregator with two interfaces:
 
-> Authorized testing only. Use this tool only on systems you own or environments where you have explicit written permission to test, such as labs, internal ranges, or sanctioned engagements.
+- a **command-line workflow** for fast operator-driven enumeration;
+- a **localhost-only web dashboard** for launching scans, reviewing results, and exporting a PDF report.
+
+> Authorized testing only. Use this tool only on systems you own or environments where you have explicit written permission to test, such as HTB/PG labs, internal ranges, or sanctioned engagements.
+
+---
 
 ## Table of Contents
 
 - [Overview](#overview)
-- [Components](#components)
-- [Requirements](#requirements)
-- [CLI Usage](#cli-usage)
-- [How a Run Works](#how-a-run-works)
-- [Output Structure](#output-structure)
-- [Dashboard UI](#dashboard-ui)
-- [Pivoting](#pivoting)
-- [Reporting](#reporting)
-- [Safety Notes](#safety-notes)
+- [CLI Tutorial](#cli-tutorial)
+  - [What you need](#what-you-need)
+  - [The two modes](#the-two-modes)
+  - [How a run is structured](#how-a-run-is-structured)
+  - [Where the output goes](#where-the-output-goes)
+  - [Full flag reference](#full-flag-reference)
+  - [Recipes](#recipes)
+  - [Reading the results](#reading-the-results)
+  - [Pivoting](#pivoting)
+  - [Troubleshooting](#troubleshooting)
+- [Dashboard UI Tutorial](#dashboard-ui-tutorial)
+  - [Start it](#start-it)
+  - [The layout](#the-layout)
+  - [Launch a scan](#launch-a-scan)
+  - [Watch it live](#watch-it-live)
+  - [Read the results in the UI](#read-the-results-in-the-ui)
+  - [Export the PDF report](#export-the-pdf-report)
+  - [Manage runs](#manage-runs)
+  - [Notes and safety](#notes-and-safety)
+- [Authorized Use](#authorized-use)
+
+---
 
 ## Overview
 
-`enumerator.sh` is an Active Directory recon aggregator that wraps the same tools an operator would normally run by hand, including `fscan`, `NetExec`, `ldapsearch`, `impacket`, `BloodHound`, `certipy`, `ffuf`, `feroxbuster`, and `nuclei`. It routes enumeration by open port, collects loot automatically, and in authenticated mode builds an actionable attack path from the BloodHound data with copy-ready commands. [file:18]
+`enumerator.sh` is an Active Directory recon aggregator that runs the same tools you would normally run by hand — `fscan`, `NetExec (nxc)`, `ldapsearch`, `impacket`, `BloodHound`, `certipy`, `hashcat`, `ffuf` / `feroxbuster`, `nuclei`, and more — but orchestrates them, routes checks by open port, collects loot, and in authenticated mode builds a BloodHound attack path with copy-ready commands. The dashboard is a local FastAPI front-end that launches scans, streams them live, parses results into readable tabs, and exports a PDF report. [file:18][file:19]
 
-The dashboard is a small local FastAPI application that serves a single-page UI on `127.0.0.1`. It can launch scans, stream output live, parse completed runs into readable tabs, browse collected files, and export a full PDF report. [file:19]
+---
 
-## Components
+## CLI Tutorial
 
-### CLI Orchestrator
+### What you need
 
-The CLI is the main execution engine. It supports:
-- unauthenticated sweeps for anonymous and low-friction checks;
-- authenticated assessment for LDAP-heavy and Kerberos-heavy enumeration;
-- BloodHound collection and attack-path analysis;
-- ADCS enumeration and abuse path generation;
-- loot collection, audit logging, and optional flag hunting. [file:18]
+Enumerator assumes a normal Kali or pentest box with the usual tools available in `PATH`. The script degrades gracefully: if a tool is missing, it skips that step and tells you instead of hard-failing the entire run. [file:18]
 
-### Local Dashboard
+Tools used when present:
 
-The dashboard is the local web interface for the same engine. It provides:
-- a scan form that maps directly to `enumerator.sh` flags;
-- a live console with color-coded output;
-- parsed tabs for overview, ports, creds, loot, web findings, BloodHound paths, and commands;
-- one-click PDF export. [file:19]
-
-## Requirements
-
-Enumerator assumes a normal Kali-style assessment box with the usual tools available in `PATH`. If a tool is missing, the script degrades gracefully by skipping that step and reporting it instead of hard-failing the entire run. [file:18]
-
-Commonly used tools include:
 - `fscan`
 - `netexec` / `nxc`
 - `ldapsearch`
-- `impacket` tools
+- `impacket-*` such as `secretsdump.py`, `GetUserSPNs.py`, `GetNPUsers.py`
 - `bloodhound-python`
 - `certipy`
 - `bloodyAD`
-- `hashcat` or `john`
+- `targetedKerberoast.py`
+- `hashcat` / `john`
 - `ffuf` / `feroxbuster`
 - `nuclei`
 - `nikto`
 - `sqlmap`
+- `testssl.sh` / `sslscan`
+- `hydra`
+- `kerbrute`
+- `enum4linux-ng`
+- `rpcclient`
+- `smbclient`
 - `evil-winrm`
 - `proxychains4`
 - `chisel`
 - `ligolo-ng` [file:18]
-
-## CLI Usage
-
-### Make it executable
 
 ```bash
 chmod +x enumerator.sh
 ./enumerator.sh --usage
 ```
 
-### Unauthenticated mode
+### The two modes
 
-Use this when you do not have credentials yet.
+| Mode | Invocation | What it does |
+|---|---|---|
+| Unauthenticated | `./enumerator.sh --unauth <ip>` | Sweep plus per-service checks with no credentials, including anonymous SMB/LDAP/FTP, web enumeration, AS-REP roasting, and null-session style checks. [file:18] |
+| Authenticated | `./enumerator.sh --auth <ip> -u <user> -p <pass> -d <domain>` | Everything above plus credentialed LDAP, share loot, BloodHound collection and attack-path analysis, ADCS / certipy, Kerberoast, LAPS / gMSA / GPP, NTDS-oriented paths, and flags. [file:18] |
 
 ```bash
+# Quick anonymous look at a host
 ./enumerator.sh --unauth 10.10.10.10
+
+# Full credentialed AD sweep
+./enumerator.sh --auth 10.129.230.181 -u support -p 'Ironside47pleasure40Watchful' -d support.htb
 ```
 
-This mode performs per-service checks without credentials, including anonymous SMB, LDAP, and FTP checks, web enumeration, AS-REP roasting, and null-session style discovery where supported. [file:18]
+Authenticated mode needs `-u` and one of `-p` or `-H`. The `-d <domain>` argument is important for LDAP-heavy and Kerberos-heavy workflows. [file:18]
 
-### Authenticated mode
+### How a run is structured
 
-Use this when you already have valid credentials or an NT hash.
+Each run follows a four-phase workflow: port discovery with `fscan`, per-service enumeration based on discovered ports, vulnerability lead generation including optional aggressive checks, and finally summary generation with prioritized leads and an attack path. [file:18]
 
-```bash
-./enumerator.sh --auth 10.129.230.181 -u support -p 'Password' -d support.htb
+```text
+PHASE 1  PORT DISCOVERY      fscan, all 65535 TCP ports (no nmap)
+PHASE 2  PER-SERVICE ENUM    each open port routed to its handler
+PHASE 3  VULNERABILITY LEADS zerologon/nopac/petitpotam, ADCS, spray (with --aggressive)
+PHASE 4  SUMMARY             _SUMMARY.txt + prioritized leads + attack path
 ```
 
-Authenticated mode extends the unauthenticated coverage with credentialed LDAP enumeration, share loot, BloodHound collection and analysis, ADCS checks, Kerberoast paths, LAPS/gMSA/GPP-related checks, NTDS-oriented paths, and optional flag collection. It requires `-u` and one of `-p` or `-H`, while `-d` is important for domain-heavy LDAP and Kerberos workflows. [file:18]
+Port-to-handler routing:
 
-### Common examples
+| Ports | Handler |
+|---|---|
+| 21 | FTP (anonymous login, loot download). [file:18] |
+| 22 / 23 | SSH / Telnet. [file:18] |
+| 25 / 465 / 587 | SMTP (user enumeration). [file:18] |
+| 53 | DNS (zone transfer, SRV). [file:18] |
+| 88 | Kerberos (AS-REP roast, kerbrute). [file:18] |
+| 80 / 443 / 8000 / 8080 / 8443 / 8888 | HTTP/S (tech fingerprinting, fuzzing, vulnerability checks). [file:18] |
+| 110 / 995 | POP3. [file:18] |
+| 111 / 2049 | NFS (showmount, mount). [file:18] |
+| 135 / 593 | MSRPC. [file:18] |
+| 139 / 445 | SMB (shares, signing, RID enumeration, loot). [file:18] |
+| 143 / 993 | IMAP. [file:18] |
+| 161 | SNMP. [file:18] |
+| 389 / 636 / 3268 / 3269 | LDAP (dump, BloodHound, ADCS, trusts). [file:18] |
+| 1433 | MSSQL. [file:18] |
+| 3306 | MySQL. [file:18] |
+| 3389 | RDP. [file:18] |
+| 5985 / 5986 | WinRM (evil-winrm, flags). [file:18] |
+| 6379 | Redis. [file:18] |
 
-#### Pass-the-hash
+### Where the output goes
 
-```bash
-./enumerator.sh --auth 10.129.230.181 -u administrator -H <NTHASH> -d corp.local
+Every run lands in a timestamped folder in the current directory, using a structure like `enum_<ip>_<YYYYMMDD_HHMMSS>/`. The run contains a human-readable summary, an audit trail of every command, raw scan data, per-service output, and collected loot such as BloodHound JSON, ADCS analysis, hashes, downloaded shares, and flags. [file:18]
+
+```text
+enum_<ip>_<YYYYMMDD_HHMMSS>/
+├── _SUMMARY.txt
+├── _commands.log
+├── scans/
+├── services/
+└── loot/
 ```
 
-#### Kerberos auth
+Recommended reading order:
+
+1. `_SUMMARY.txt`
+2. the `LEADS / NEXT STEPS` block
+3. `loot/bh_analysis.txt`
+4. `loot/adcs_analysis.txt` [file:18]
+
+By default, the terminal stays compact and writes the noisy tool output into `services/*.txt`. Use `-v` or `--verbose` if you want to stream everything live. [file:18]
+
+### Full flag reference
+
+#### Target and mode
+
+| Flag | Meaning |
+|---|---|
+| `--unauth <ip>` | Unauthenticated sweep. [file:18] |
+| `--auth <ip>` | Authenticated sweep, requiring `-u` plus `-p` or `-H`. [file:18] |
+
+#### Credentials
+
+| Flag | Meaning |
+|---|---|
+| `-u <user>` | Username. [file:18] |
+| `-p <pass>` | Cleartext password. [file:18] |
+| `-H <nthash>` | NT hash for pass-the-hash instead of `-p`. [file:18] |
+| `-d <domain>` | AD domain, for example `support.htb`. [file:18] |
+| `-k` | Use Kerberos auth for impacket and nxc. [file:18] |
+| `--local` | Local authentication instead of domain authentication. [file:18] |
+
+#### Pivot and proxy
+
+| Flag | Meaning |
+|---|---|
+| `--pivot chisel` | Mark that traffic egresses through a SOCKS proxy. [file:18] |
+| `--proxy-addr <url>` | SOCKS proxy address, such as `socks5://127.0.0.1:1080`. [file:18] |
+
+#### Scope and behavior
+
+| Flag | Meaning |
+|---|---|
+| `--aggressive` | Disruptive checks such as zerologon, nopac, petitpotam, Coercer, password spray, and credential spray. [file:18] |
+| `--services <list>` / `--only <list>` | Run only selected handlers, for example `smb,ldap,kerberos`. [file:18] |
+| `--all-services` | Run every handler, which is the default. [file:18] |
+| `--no-web` | Skip the HTTP/web handler entirely. [file:18] |
+| `--no-web-brute` | Skip web content discovery with ffuf or feroxbuster. [file:18] |
+| `--no-web-fuzz` | Skip directory, vhost, and parameter fuzzing. [file:18] |
+| `--web-vulns` | Enable OWASP-style web testing, including nikto, nuclei vuln tags, TLS and LFI checks, plus sqlmap when `--aggressive` is used. [file:18] |
+| `--no-bloodhound` | Skip BloodHound collection and analysis in authenticated mode. [file:18] |
+| `--no-flags` | Box-build mode, meaning do not hunt for `user.txt` or `root.txt`. [file:18] |
+| `--no-loot-shares` | Do not auto-download readable SMB shares. [file:18] |
+| `--no-loot-ftp` | Do not auto-download anonymous FTP content. [file:18] |
+
+#### Wordlists, brute force, and cracking
+
+| Flag | Default / meaning |
+|---|---|
+| `--web-wordlist <f>` | `seclists` raft-medium directories. [file:18] |
+| `--vhost-wordlist <f>` | `seclists` top-5000 subdomains. [file:18] |
+| `--param-wordlist <f>` | Burp parameter names wordlist. [file:18] |
+| `--login-path <p>` + `--login-userlist <f>` + `--login-passlist <f>` + `--login-failstr <s>` | HTTP login brute force, enabled only when path and both lists are set. [file:18] |
+| `--spray-wordlist <f>` | `seclists` top-1000 for password spraying. [file:18] |
+| `--spray-force` | Spray the full list even if a lockout policy exists; dangerous. [file:18] |
+| `--crack-wordlist <f>` | `rockyou`. [file:18] |
+| `--crack-timeout <s>` | `600` seconds per cracking job. [file:18] |
+
+#### Output
+
+| Flag | Meaning |
+|---|---|
+| `-v` / `--verbose` | Stream full tool output to the terminal. [file:18] |
+| `--usage` / `-h` / `--help` | Show built-in help. [file:18] |
+
+Lockout safety is enabled by default for spray-like actions and flag-hunting login attempts, and the tool backs off when a lockout policy is detected. The `--spray-force` option overrides that protection and should only be used when you understand the environment’s lockout policy. [file:18]
+
+### Recipes
 
 ```bash
+# 1) First contact, unknown host, no creds
+./enumerator.sh --unauth 10.10.10.10
+
+# 2) Full authenticated AD assessment
+./enumerator.sh --auth 10.129.230.181 -u support \
+  -p 'Ironside47pleasure40Watchful' -d support.htb
+
+# 3) Pass-the-hash instead of a password
+./enumerator.sh --auth 10.129.230.181 -u administrator \
+  -H 'aad3b435b51404eeaad3b435b51404ee:<nthash>' -d corp.local
+
+# 4) Kerberos auth
 export KRB5CCNAME=/tmp/user.ccache
 ./enumerator.sh --auth dc01.corp.local -u user -p pass -d corp.local -k
-```
 
-#### Only selected services
+# 5) Box-build mode
+./enumerator.sh --auth 10.129.230.181 -u support -p 'pass' -d support.htb --no-flags
 
-```bash
-./enumerator.sh --auth 10.129.230.181 -u support -p pass -d support.htb --services smb,ldap,kerberos
-```
+# 6) Aggressive AD run
+./enumerator.sh --auth 10.129.230.181 -u support -p 'pass' -d support.htb --aggressive
 
-#### Web-focused run
+# 7) Only specific services
+./enumerator.sh --auth 10.129.230.181 -u support -p 'pass' -d support.htb \
+  --services smb,ldap,kerberos
 
-```bash
+# 8) Web-focused, with full OWASP vuln testing
 ./enumerator.sh --unauth 10.10.11.20 --services web --web-vulns
-```
 
-#### Aggressive run
+# 9) HTTP login brute against a form
+./enumerator.sh --unauth 10.10.11.20 --services web \
+  --login-path /login.php \
+  --login-userlist users.txt \
+  --login-passlist /usr/share/wordlists/rockyou.txt \
+  --login-failstr 'Invalid'
+
+# 10) Custom spray and crack lists
+./enumerator.sh --auth 10.129.230.181 -u support -p 'pass' -d support.htb \
+  --aggressive --spray-wordlist mylist.txt --crack-wordlist rockyou.txt
+```
+[file:18]
+
+### Reading the results
+
+`_SUMMARY.txt` contains open ports, per-service one-liners, and a `LEADS / NEXT STEPS` block. Leads are prioritized as `[!!]` critical, `[!]` notable, and `[+]` good-to-have, and each lead points to the file with supporting detail and a suggested next command. [file:18]
+
+`loot/bh_analysis.txt` is the authenticated-mode privesc playbook. For each object you can abuse, such as a DC computer account, a user, or a group, it prints routes like Shadow Credentials, RBCD, Targeted Kerberoast, force-reset, add-self-to-group, and DCSync, along with exact commands and a HackTricks link. [file:18]
+
+`loot/adcs_analysis.txt` summarizes vulnerable certificate templates such as ESC1, ESC2, ESC3, ESC4, ESC6, ESC7, and ESC8, including the certipy request-to-auth-to-pass-the-hash chain. The `loot/` directory can also contain valid credentials, NTDS dumps, candidate secrets, LDAP-derived findings, downloaded shares, FTP content, BloodHound JSON, and flags unless flag collection was disabled. [file:18]
+
+### Pivoting
+
+Once you have a foothold, you often need to enumerate an internal subnet that the compromised host can reach but your Kali box cannot. Enumerator supports two clean pivoting models: `chisel` for reverse SOCKS5 and `ligolo-ng` for a routed TUN interface. The tool is pivot-aware and applies SOCKS or `proxychains4 -q` per tool where appropriate. [file:18]
+
+> Never launch `enumerator.sh` itself under `proxychains`. The documented approach is to use `--pivot chisel` and `--proxy-addr`, because wrapping the orchestrator itself is explicitly unsupported. [file:18]
+
+#### Option A — chisel
+
+Best when you want a SOCKS proxy and do not want to touch routing.
 
 ```bash
-./enumerator.sh --auth 10.129.230.181 -u support -p pass -d support.htb --aggressive
-```
-
-These patterns come directly from the documented operator workflows in the CLI tutorial. [file:18]
-
-## How a Run Works
-
-Each run follows a four-phase pipeline:
-
-1. **Port discovery** with `fscan` across TCP ports.
-2. **Per-service enumeration**, where each open port is sent to the matching handler.
-3. **Vulnerability lead generation**, including optional aggressive checks and ADCS-oriented leads.
-4. **Summary generation**, which writes prioritized findings and next steps to disk. [file:18]
-
-Port-aware routing is one of the main differentiators. The tool automatically maps services such as FTP, Kerberos, SMB, LDAP, MSSQL, WinRM, DNS, NFS, IMAP/POP, web ports, and others to the right enumeration logic instead of making the operator manually chain each tool. [file:18]
-
-## Output Structure
-
-Each execution writes to a timestamped folder, typically in the form `enum<ip><timestamp>` or similar run-specific output under the current directory. The output includes a human-readable summary, raw scan output, per-service logs, loot, credentials, analysis files, and the full command log. [file:18]
-
-Typical artifacts include:
-- `SUMMARY.txt`
-- `commands.log`
-- raw `fscan` results
-- per-service files such as `smb.txt`, `ldap.txt`, `web80.txt`
-- BloodHound JSON
-- `bhanalysis.txt`
-- `adcsanalysis.txt`
-- downloaded shares and FTP loot
-- flags, unless flag hunting is disabled. [file:18]
-
-The CLI tutorial recommends reading these first:
-1. `SUMMARY.txt`
-2. the `LEADS / NEXT STEPS` block
-3. `loot/bhanalysis.txt` in authenticated mode
-4. `loot/adcsanalysis.txt` when ADCS is present. [file:18]
-
-By default, terminal output stays compact and pushes the noisy details into files. If you want everything streamed to screen, use `-v` or `--verbose`. [file:18]
-
-## Dashboard UI
-
-The dashboard is a localhost-only FastAPI front-end for the same workflow. It reads the run folders produced by the scanner, can launch new scans, and serves a single-page UI on `127.0.0.1:8000` by default. The documented startup flow is to enter the dashboard directory, run `run.sh`, and then open the local web interface. [file:19]
-
-### Start the dashboard
-
-```bash
-cd enumdashboard
-./run.sh
-```
-
-`run.sh` creates a Python virtual environment, installs dependencies such as FastAPI, uvicorn, and reportlab, auto-detects where your run folders and `enumerator.sh` live, and serves the UI locally. The dashboard intentionally binds to localhost, and the recommended way to access it remotely is through SSH tunneling rather than exposing it directly. [file:19]
-
-### Main tabs
-
-The UI includes the following tabs:
-- **Overview**: verdict, key stats, credentials held, next actions, leads, users, computers, and flags.
-- **Ports**: open ports and parsed service information.
-- **Creds**: validated credentials, candidate secrets, LDAP-sourced secrets, and flags.
-- **Loot**: all collected files grouped by type, with text-file viewing support.
-- **Web**: per-port web technology details, discovered content, and nuclei findings.
-- **BloodHound**: attack-path summaries, route cards, commands, references, and directory inventory.
-- **Commands**: full filterable command log with copy buttons.
-- **Live Scan**: form-driven scan launch and live monitoring. [file:19]
-
-### Launching a scan
-
-The Live Scan form maps directly to CLI flags. It supports:
-- auth vs unauth mode;
-- target, username, password, and domain;
-- service selection;
-- web controls;
-- BloodHound toggles;
-- loot toggles;
-- flag hunting;
-- aggressive mode;
-- advanced login and wordlist settings. [file:19]
-
-When you press launch, the UI switches to the live console. Output is streamed in real time, color-coded for leads, warnings, critical findings, flags, and section headers. When the job finishes, the completed run is automatically added to the run selector and becomes available in the analysis tabs. [file:19]
-
-### Reading results in the UI
-
-The documented operator flow is to start with **Overview**, because it centralizes the high-value output: verdict, key stats, credentials you hold, highlighted next actions, condensed attack paths, and the user/computer inventory. For deeper privesc logic, the **BloodHound** tab shows route cards such as Shadow Credentials, RBCD, Targeted Kerberoast, force-reset, group-add, DCSync, and ADCS ESC paths with numbered steps and copyable commands. [file:19]
-
-The **Loot** tab is for browsing collected files, while **Commands** acts as a searchable audit trail of everything launched during the run. [file:19]
-
-## Pivoting
-
-Enumerator is pivot-aware. Once you gain a foothold, the documented pivot options are `chisel` for a SOCKS-based workflow and `ligolo-ng` for a routed TUN-based workflow. The tool handles these two models differently and recommends not wrapping the entire script under `proxychains`. [file:18]
-
-### Option A: chisel reverse SOCKS5
-
-Use this when you want a SOCKS proxy and do not want to modify routing.
-
-```bash
-# On Kali
+# 1) On Kali — start a chisel server in reverse mode
 ./chisel server -p 9001 --reverse
 
-# On the foothold
+# 2) On the compromised foothold host
 ./chisel client YOUR_KALI_IP:9001 R:1080:socks
 
-# Back on Kali
-./enumerator.sh --auth 172.16.1.20 -u jdoe -p 'Winter2025!' -d corp.local --pivot chisel --proxy-addr socks5://127.0.0.1:1080
+# 3) Back on Kali — run Enumerator through that SOCKS proxy
+./enumerator.sh --auth 172.16.1.20 -u jdoe -p 'Winter2025!' -d corp.local \
+  --pivot chisel --proxy-addr socks5://127.0.0.1:1080
 ```
 
-In this model, proxy-aware tools use the SOCKS proxy directly, while libc-based tools are wrapped with `proxychains4 -q` internally. The script explicitly warns against running the entire orchestrator itself under `proxychains`. [file:18]
+In this mode, `fscan`, `ffuf`, `feroxbuster`, and `nuclei` get the SOCKS proxy natively, while libc-based tools are auto-prefixed with `proxychains4 -q`. If you run one-off commands manually, you may still need a matching `proxychains4.conf` entry yourself. [file:18]
 
-### Option B: ligolo-ng routed TUN
+#### Option B — ligolo-ng
 
-Use this when you want routed internal access rather than SOCKS-only forwarding.
+Best when you want transparent routed access to the internal subnet.
 
 ```bash
-# On Kali
+# 1) On Kali — create and bring up the ligolo TUN interface
 sudo ip tuntap add user $(whoami) mode tun ligolo
 sudo ip link set ligolo up
+
+# 2) On Kali — start the ligolo proxy
 ./proxy -selfcert
 
-# On the foothold
+# 3) On the compromised host — connect the agent back
 ./agent -connect YOUR_KALI_IP:11601 -ignore-cert
+# Windows:
+# agent.exe -connect YOUR_KALI_IP:11601 -ignore-cert
 
-# Back on Kali after tunnel selection
+# 4) In the ligolo console — select the session and start the tunnel
+ligolo-ng » session
+ligolo-ng » start
+
+# 5) On Kali — route the internal subnet
 sudo ip route add 172.16.1.0/24 dev ligolo
 
-# Run Enumerator normally
+# 6) Run Enumerator normally
 ./enumerator.sh --auth 172.16.1.20 -u jdoe -p 'Winter2025!' -d corp.local
 ```
 
-The CLI documentation describes ligolo-ng as the smoother option when you need transparent routed reachability, especially for traffic that is awkward over pure SOCKS. [file:18]
+To catch reverse shells or relays back through the tunnel, you can add a ligolo listener. [file:18]
 
-## Reporting
+```bash
+ligolo-ng » listener_add --addr 0.0.0.0:4444 --to 127.0.0.1:4444
+```
 
-The dashboard can export a single sectioned PDF report for the selected run. The documented report structure includes executive summary, scope, ports and services, loot, credentials with source context, collected files and shares, flags, BloodHound attack paths, web findings, and the full command-line history. [file:19]
+#### Which to use?
 
-This makes the dashboard useful not only as an operator console but also as a delivery surface for shareable reporting. [file:19]
+| Aspect | chisel | ligolo-ng |
+|---|---|---|
+| Mechanism | SOCKS5 proxy. [file:18] | Routed TUN interface. [file:18] |
+| Tool invocation | `--pivot chisel --proxy-addr socks5://127.0.0.1:1080`. [file:18] | Normal execution after routing is in place. [file:18] |
+| `proxychains` for ad-hoc tools | Usually yes. [file:18] | No. [file:18] |
+| UDP / ICMP | TCP only. [file:18] | Works via TUN. [file:18] |
+| Multi-hop | Chain clients. [file:18] | Start additional agents and routes. [file:18] |
 
-## Safety Notes
+Pivoting tips:
+- `fscan` over a pivot can be slow because it still sweeps all TCP ports. Narrow the scope with `--services` if needed. [file:18]
+- SOCKS is TCP-only, so Kerberos or DNS edge cases may behave better over ligolo’s TUN model. [file:18]
+- For AD name resolution over a pivot, point the box at the internal DC for DNS or use IPs with `-d <domain>` explicitly. [file:18]
 
-Enumerator is built around authorized-use assumptions and records everything it runs into `commands.log`, which provides a reproducible audit trail. The CLI documentation also notes that account lockout awareness is enabled by default for spray-like behavior, while `--spray-force` overrides that safety and should only be used when you fully understand the environment’s lockout policy. [file:18]
+### Troubleshooting
 
-The dashboard inherits the same safety assumptions. It binds to localhost, supports a read-only mode through `ENUMALLOWSCAN=0`, and can be shared more safely through an SSH tunnel instead of direct network exposure. Runs launched through the UI are still normal Enumerator runs and remain inspectable on disk. [file:19]
+| Symptom | Fix |
+|---|---|
+| “requires -u / -p” | Auth mode needs `-u` and one of `-p` or `-H`. [file:18] |
+| A tool step is skipped | That tool is not installed or not in `PATH`; install it or ignore that feature. [file:18] |
+| Script refuses to start with proxychains | Do not wrap the script in `proxychains`; use `--pivot` and `--proxy-addr` instead. [file:18] |
+| Accounts getting locked | Drop `--spray-force`; default behavior is lockout-aware. [file:18] |
+| Too noisy on screen | Default output is already compact; read `services/*.txt` and only add `-v` when debugging. [file:18] |
+| Slow over a pivot | Prefer ligolo TUN when possible and reduce scope with `--services`. [file:18] |
+
+---
+
+## Dashboard UI Tutorial
+
+### Start it
+
+The dashboard is a small FastAPI application that serves a single-page UI on `127.0.0.1`. It reads the `enum_<ip>_<stamp>` run folders produced by the scanner and can launch new scans for you. [file:19]
+
+The dashboard directory must contain:
+- `server.py`
+- `report.py`
+- `run.sh`
+- `requirements.txt`
+- `static/index.html` [file:19]
+
+```bash
+cd enum_dashboard
+./run.sh
+```
+
+`run.sh` creates a Python virtual environment, installs dependencies such as FastAPI, uvicorn, and reportlab, auto-detects where your run folders and `enumerator.sh` live, and serves the UI locally. Then open `http://127.0.0.1:8000`. [file:19]
+
+#### Options and environment variables
+
+| Variable / arg | Purpose | Default |
+|---|---|---|
+| `./run.sh <scan_root>` | Folder that holds the `enum_*` run folders. [file:19] | Auto-detected. [file:19] |
+| `./run.sh <scan_root> <port>` | Bind port. [file:19] | `8000`. [file:19] |
+| `ENUM_SCAN_ROOT` | Same as `scan_root`. [file:19] | Auto. [file:19] |
+| `ENUM_SCRIPT` | Path to `enumerator.sh`. [file:19] | Auto. [file:19] |
+| `ENUM_PORT` / `ENUM_HOST` | Port and bind host. [file:19] | `8000` / `127.0.0.1`. [file:19] |
+| `ENUM_ALLOW_SCAN=0` | View-only mode that disables launching scans. [file:19] | Scanning enabled. [file:19] |
+
+It binds to localhost only. For remote access, the recommended model is an SSH tunnel such as `ssh -L 8000:127.0.0.1:8000 user@kali` instead of exposing it directly. [file:19]
+
+### The layout
+
+Top bar actions:
+- run dropdown to choose the completed run you are viewing;
+- refresh button to rescan the run list;
+- export report button to download the PDF for the selected run;
+- delete button to remove the selected run folder from disk;
+- new scan button to jump to the Live Scan form. [file:19]
+
+Main tabs:
+
+| Tab | What it contains |
+|---|---|
+| Overview | Verdict, key stats, credentials you hold, what to do next, priority leads, users and computers, flags. [file:19] |
+| Ports | Open ports and the parsed service table. [file:19] |
+| Creds | Validated credentials, candidate secrets, LDAP-sourced secrets, flags. [file:19] |
+| Loot | All collected files grouped by type, with sizes and text-file viewing. [file:19] |
+| Web | Per-port web technologies, discovered content with status codes, and nuclei findings. [file:19] |
+| BloodHound | Capability summary, route cards with copy-ready commands, HackTricks links, supporting findings, and the domain inventory. [file:19] |
+| Commands | Tools used and the full filterable command log, with copy buttons. [file:19] |
+| Live Scan | Form-driven scan launch and live monitoring. [file:19] |
+
+### Launch a scan
+
+The Live Scan form maps directly to `enumerator.sh` flags. [file:19]
+
+| Form control | Flag it sets |
+|---|---|
+| mode (auth / unauth) | `--auth` / `--unauth`. [file:19] |
+| target IP / host | The target. [file:19] |
+| username / password / domain | `-u` / `-p` / `-d`. [file:19] |
+| All services or selected services | Default behavior or `--services <list>`. [file:19] |
+| Enumerate web | On by default; off sets `--no-web`. [file:19] |
+| Web fuzzing | On by default; off sets `--no-web-fuzz`. [file:19] |
+| OWASP vuln tests | `--web-vulns`. [file:19] |
+| Download readable SMB shares | On by default; off sets `--no-loot-shares`. [file:19] |
+| Download anonymous FTP | On by default; off sets `--no-loot-ftp`. [file:19] |
+| Use BloodHound | On by default; off sets `--no-bloodhound`. [file:19] |
+| Hunt for flags | On by default; off sets `--no-flags`. [file:19] |
+| Aggressive | `--aggressive`. [file:19] |
+| Advanced login / wordlist fields | Matching `--login-*` and `--*-wordlist` flags. [file:19] |
+
+Press launch scan and the UI switches to the live console. [file:19]
+
+### Watch it live
+
+The live console shows a green “scan running” header with a live dot and streams lines as they are produced. Output is color-coded for leads, flags, critical findings, warnings, good findings, and section headers. [file:19]
+
+The stop action kills `fscan` and its child processes as a process group. When the run finishes, the header changes to “scan done”, the new run is added to the dropdown, and the parsed results become immediately available in the other tabs. [file:19]
+
+You can leave the Live Scan tab while a job is still running. Other tabs display a scan-running banner with a shortcut back to the live console. [file:19]
+
+### Read the results in the UI
+
+The documented place to start is **Overview**, because it gives you the verdict, stats, credentials you hold, highlighted next actions, condensed attack-path cards, priority leads, user and computer tables, and flags in one place. [file:19]
+
+For full privilege-escalation logic, open the **BloodHound** tab. Each attack path is shown as route cards such as Shadow Credentials, RBCD, Targeted Kerberoast, force-reset, add-self-to-group, DCSync, and ADCS ESC paths, complete with numbered steps, copyable commands, and a HackTricks reference. [file:19]
+
+The **Loot** tab is for browsing collected files, while **Commands** is the complete filterable audit trail of the run. [file:19]
+
+### Export the PDF report
+
+Select a run and click export report to generate a single sectioned PDF called “Enumeration report”. The exported report includes executive summary, scope, ports and services, loot with credential source context, all collected files and shares, flags, BloodHound attack paths, web and fuzzing findings, and the full command-line history. [file:19]
+
+The button shows progress and confirms the download when successful, or reports a clear error if something goes wrong. [file:19]
+
+### Manage runs
+
+You can switch runs from the dropdown at any time. The refresh action rescans the folder for new and old runs, while the delete action removes the selected run directory from disk and stops it first if it is still active. [file:19]
+
+### Notes and safety
+
+The server is localhost-only, and remote access should go through an SSH tunnel. Setting `ENUM_ALLOW_SCAN=0` turns the dashboard into a read-only viewer so you can share results without allowing new launches. [file:19]
+
+The dashboard runs the same `enumerator.sh`, so the same lockout-awareness and authorized-use rules apply. Every launched action is captured in that run’s command log. [file:19]
+
+Tip: the dashboard and CLI are interchangeable. Runs created from the command line appear automatically in the dashboard, and runs launched from the dashboard are still ordinary `enum_<ip>_<stamp>` folders you can inspect manually. [file:19]
+
+---
+
+## Authorized Use
+
+This project is intended only for machines you own or environments where you have explicit written authorization to test. Both the CLI and the dashboard are documented as authorized-use tools, and both preserve an audit trail of actions through the run output and command logs. [file:18][file:19]
