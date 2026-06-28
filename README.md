@@ -1,11 +1,3 @@
-<p align="center">
-  <img src="docs/images/enumerator-overview-1.jpg" alt="Enumerator overview" width="1000">
-</p>
-
-<p align="center">
-  <img src="docs/images/enumerator-dashboard-1.jpg" alt="Enumerator dashboard" width="1000">
-</p>
-
 # Enumerator
 
 **Enumerator** is an fscan-driven Active Directory recon aggregator with two interfaces:
