@@ -1,7 +1,7 @@
 # Enumerator
 Automated recon &amp; enumeration tool. From nothing do Domain Admin.
 
-enumerator.sh — Command-Line Tutorial
+[CLI Tutorial] (#CLI Tutorial)
 
 
 Authorized testing only. This tool is for machines you own or have explicit
