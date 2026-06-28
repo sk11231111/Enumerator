@@ -1,6 +1,6 @@
 # Enumerator
 
-**Enumerator** is an fscan-driven Active Directory recon aggregator with two interfaces:
+**Enumerator** is an Active Directory recon & enumeration aggregator with two interfaces:
 
 - a **command-line workflow** for fast operator-driven enumeration;
 - a **localhost-only web dashboard** for launching scans, reviewing results, and exporting a PDF report.
